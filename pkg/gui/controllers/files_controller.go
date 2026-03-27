@@ -10,6 +10,8 @@ import (
 	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/commands/git_commands"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
+	"github.com/jesseduffield/lazygit/pkg/commands/oscommands"
+	"github.com/jesseduffield/lazygit/pkg/commands/patch"
 	"github.com/jesseduffield/lazygit/pkg/gui/context"
 	"github.com/jesseduffield/lazygit/pkg/gui/filetree"
 	"github.com/jesseduffield/lazygit/pkg/gui/types"
@@ -319,38 +321,66 @@ func (self *FilesController) GetOnRenderToMain() func() {
 			mainShowsStaged := !split && node.GetHasStagedChanges()
 
 			pathOverrides := self.pathOverridesForDiff(node)
-			cmdObj := self.c.Git().WorkingTree.WorktreeFileDiffCmdObj(node, false, mainShowsStaged, pathOverrides)
+			showLineNumbers := self.c.UserConfig().Gui.ShowDiffLineNumbers
+
 			title := self.c.Tr.UnstagedChanges
 			if mainShowsStaged {
 				title = self.c.Tr.StagedChanges
 			}
+
+			var mainTask types.UpdateTask
+			if showLineNumbers {
+				cmdObj := self.c.Git().WorkingTree.WorktreeFileDiffCmdObj(node, true, mainShowsStaged, pathOverrides)
+				mainTask = self.diffTaskWithLineNumbers(cmdObj)
+			} else {
+				cmdObj := self.c.Git().WorkingTree.WorktreeFileDiffCmdObj(node, false, mainShowsStaged, pathOverrides)
+				mainTask = types.NewRunPtyTask(cmdObj.GetCmd())
+			}
+
 			refreshOpts := types.RefreshMainOpts{
 				Pair: self.c.MainViewPairs().Normal,
 				Main: &types.ViewUpdateOpts{
-					Task:     types.NewRunPtyTask(cmdObj.GetCmd()),
+					Task:     mainTask,
 					SubTitle: self.c.Helpers().Diff.IgnoringWhitespaceSubTitle(),
 					Title:    title,
 				},
 			}
 
 			if split {
-				cmdObj := self.c.Git().WorkingTree.WorktreeFileDiffCmdObj(node, false, true, pathOverrides)
-
 				title := self.c.Tr.StagedChanges
 				if mainShowsStaged {
 					title = self.c.Tr.UnstagedChanges
 				}
 
+				var secondaryTask types.UpdateTask
+				if showLineNumbers {
+					cmdObj := self.c.Git().WorkingTree.WorktreeFileDiffCmdObj(node, true, true, pathOverrides)
+					secondaryTask = self.diffTaskWithLineNumbers(cmdObj)
+				} else {
+					cmdObj := self.c.Git().WorkingTree.WorktreeFileDiffCmdObj(node, false, true, pathOverrides)
+					secondaryTask = types.NewRunPtyTask(cmdObj.GetCmd())
+				}
+
 				refreshOpts.Secondary = &types.ViewUpdateOpts{
 					Title:    title,
 					SubTitle: self.c.Helpers().Diff.IgnoringWhitespaceSubTitle(),
-					Task:     types.NewRunPtyTask(cmdObj.GetCmd()),
+					Task:     secondaryTask,
 				}
 			}
 
 			self.c.RenderToMainViews(refreshOpts)
 		})
 	}
+}
+
+func (self *FilesController) diffTaskWithLineNumbers(cmdObj *oscommands.CmdObj) types.UpdateTask {
+	diff, _ := cmdObj.RunWithOutput()
+	p := patch.Parse(diff)
+	if !p.ContainsChanges() {
+		return types.NewRenderStringTask("")
+	}
+	content := p.FormatView(patch.FormatViewOpts{ShowLineNumbers: true})
+	return types.NewRenderStringTask(content)
 }
 
 func (self *FilesController) GetOnDoubleClick() func() error {

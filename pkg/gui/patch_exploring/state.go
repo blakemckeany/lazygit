@@ -34,6 +34,12 @@ type State struct {
 	// on by default.
 	// this makes a difference for whether we want to escape out of hunk mode
 	userEnabledHunkMode bool
+
+	// total character width of the line number gutter (0 if disabled)
+	gutterWidth int
+
+	// whether to show line numbers in the formatted output
+	showLineNumbers bool
 }
 
 // these represent what select mode we're in
@@ -45,7 +51,7 @@ const (
 	HUNK
 )
 
-func NewState(diff string, selectedLineIdx int, view *gocui.View, oldState *State, useHunkModeByDefault bool) *State {
+func NewState(diff string, selectedLineIdx int, view *gocui.View, oldState *State, useHunkModeByDefault bool, showLineNumbers bool) *State {
 	if oldState != nil && diff == oldState.diff && selectedLineIdx == -1 {
 		// if we're here then we can return the old state. If selectedLineIdx was not -1
 		// then that would mean we were trying to click and potentially drag a range, which
@@ -53,13 +59,15 @@ func NewState(diff string, selectedLineIdx int, view *gocui.View, oldState *Stat
 		return oldState
 	}
 
-	patch := patch.Parse(diff)
+	p := patch.Parse(diff)
 
-	if !patch.ContainsChanges() {
+	if !p.ContainsChanges() {
 		return nil
 	}
 
-	viewLineIndices, patchLineIndices := wrapPatchLines(diff, view)
+	gutterWidth := patch.GutterWidth(p, showLineNumbers)
+
+	viewLineIndices, patchLineIndices := wrapPatchLines(diff, view, gutterWidth)
 
 	rangeStartLineIdx := 0
 	if oldState != nil {
@@ -67,7 +75,7 @@ func NewState(diff string, selectedLineIdx int, view *gocui.View, oldState *Stat
 	}
 
 	selectMode := LINE
-	if useHunkModeByDefault && !patch.IsSingleHunkForWholeFile() {
+	if useHunkModeByDefault && !p.IsSingleHunkForWholeFile() {
 		selectMode = HUNK
 	}
 
@@ -90,29 +98,29 @@ func NewState(diff string, selectedLineIdx int, view *gocui.View, oldState *Stat
 			selectMode = oldState.selectMode
 		}
 		oldPatchLineIdx := oldState.patchLineIndices[oldState.selectedLineIdx]
-		newPatchLineIdx := patch.GetNextChangeIdx(oldPatchLineIdx)
+		newPatchLineIdx := p.GetNextChangeIdx(oldPatchLineIdx)
 		// When staging an addition from a consecutive changes block, the unselected deletions get
 		// reordered to appear before the remaining additions in the new diff. This can cause the
 		// cursor to land on a deletion at the same patch line index where the staged addition used
 		// to be. In that case, skip forward past any deletions, then call GetNextChangeIdx from the
 		// first non-deletion position, which correctly lands on the next meaningful change.
-		newLines := patch.Lines()
+		newLines := p.Lines()
 		if newPatchLineIdx == oldPatchLineIdx &&
 			oldState.patch.Lines()[oldPatchLineIdx].IsAddition() &&
 			newLines[newPatchLineIdx].IsDeletion() &&
-			patch.HunkOldStartForLine(newPatchLineIdx) == oldState.patch.HunkOldStartForLine(oldPatchLineIdx) {
+			p.HunkOldStartForLine(newPatchLineIdx) == oldState.patch.HunkOldStartForLine(oldPatchLineIdx) {
 			for newPatchLineIdx < len(newLines) && newLines[newPatchLineIdx].IsDeletion() {
 				newPatchLineIdx++
 			}
-			newPatchLineIdx = patch.GetNextChangeIdx(newPatchLineIdx)
+			newPatchLineIdx = p.GetNextChangeIdx(newPatchLineIdx)
 		}
 		selectedLineIdx = viewLineIndices[newPatchLineIdx]
 	} else {
-		selectedLineIdx = viewLineIndices[patch.GetNextChangeIdx(0)]
+		selectedLineIdx = viewLineIndices[p.GetNextChangeIdx(0)]
 	}
 
 	return &State{
-		patch:               patch,
+		patch:               p,
 		selectedLineIdx:     selectedLineIdx,
 		selectMode:          selectMode,
 		rangeStartLineIdx:   rangeStartLineIdx,
@@ -121,6 +129,8 @@ func NewState(diff string, selectedLineIdx int, view *gocui.View, oldState *Stat
 		viewLineIndices:     viewLineIndices,
 		patchLineIndices:    patchLineIndices,
 		userEnabledHunkMode: userEnabledHunkMode,
+		gutterWidth:         gutterWidth,
+		showLineNumbers:     showLineNumbers,
 	}
 }
 
@@ -134,7 +144,7 @@ func (s *State) OnViewWidthChanged(view *gocui.View) {
 	if s.selectMode == RANGE {
 		rangeStartPatchLineIdx = s.patchLineIndices[s.rangeStartLineIdx]
 	}
-	s.viewLineIndices, s.patchLineIndices = wrapPatchLines(s.diff, view)
+	s.viewLineIndices, s.patchLineIndices = wrapPatchLines(s.diff, view, s.gutterWidth)
 	s.selectedLineIdx = s.viewLineIndices[selectedPatchLineIdx]
 	if s.selectMode == RANGE {
 		s.rangeStartLineIdx = s.viewLineIndices[rangeStartPatchLineIdx]
@@ -398,7 +408,8 @@ func (s *State) AdjustSelectedLineIdx(change int) {
 func (s *State) RenderForLineIndices(includedLineIndices []int) string {
 	includedLineIndicesSet := set.NewFromSlice(includedLineIndices)
 	return s.patch.FormatView(patch.FormatViewOpts{
-		IncLineIndices: includedLineIndicesSet,
+		IncLineIndices:  includedLineIndicesSet,
+		ShowLineNumbers: s.showLineNumbers,
 	})
 }
 
@@ -423,9 +434,13 @@ func (s *State) CalculateOrigin(currentOrigin int, bufferHeight int, numLines in
 	return calculateOrigin(currentOrigin, bufferHeight, numLines, firstLineIdx, lastLineIdx, s.GetSelectedViewLineIdx(), s.selectMode)
 }
 
-func wrapPatchLines(diff string, view *gocui.View) ([]int, []int) {
+func wrapPatchLines(diff string, view *gocui.View, gutterWidth int) ([]int, []int) {
+	effectiveWidth := view.InnerWidth() - gutterWidth
+	if effectiveWidth < 10 {
+		effectiveWidth = 10
+	}
 	_, viewLineIndices, patchLineIndices := utils.WrapViewLinesToWidth(
-		view.Wrap, view.Editable, strings.TrimSuffix(diff, "\n"), view.InnerWidth(), view.TabWidth)
+		view.Wrap, view.Editable, strings.TrimSuffix(diff, "\n"), effectiveWidth, view.TabWidth)
 	return viewLineIndices, patchLineIndices
 }
 

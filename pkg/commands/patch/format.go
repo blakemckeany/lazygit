@@ -1,6 +1,7 @@
 package patch
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/jesseduffield/generics/set"
@@ -16,6 +17,9 @@ type patchPresenter struct {
 
 	// line indices for tagged lines (e.g. lines added to a custom patch)
 	incLineIndices *set.Set[int]
+
+	// if true, show line number gutter
+	showLineNumbers bool
 }
 
 // formats the patch as a plain string
@@ -41,6 +45,8 @@ func formatRangePlain(patch *Patch, startIdx int, endIdx int) string {
 type FormatViewOpts struct {
 	// line indices for tagged lines (e.g. lines added to a custom patch)
 	IncLineIndices *set.Set[int]
+	// if true, show line number gutter
+	ShowLineNumbers bool
 }
 
 // formats the patch for rendering within a view, meaning it's coloured and
@@ -51,11 +57,22 @@ func formatView(patch *Patch, opts FormatViewOpts) string {
 		includedLineIndices = set.New[int]()
 	}
 	presenter := &patchPresenter{
-		patch:          patch,
-		plain:          false,
-		incLineIndices: includedLineIndices,
+		patch:           patch,
+		plain:           false,
+		incLineIndices:  includedLineIndices,
+		showLineNumbers: opts.ShowLineNumbers,
 	}
 	return presenter.format()
+}
+
+// Returns the max width of the gutter for rendering
+func GutterWidth(patch *Patch, showLineNumbers bool) int {
+	if !showLineNumbers {
+		return 0
+	}
+	digitWidth := max(len(fmt.Sprintf("%d", patch.MaxLineNumber())), 3)
+
+	return 2*digitWidth + 6
 }
 
 func (self *patchPresenter) format() string {
@@ -63,6 +80,14 @@ func (self *patchPresenter) format() string {
 	// the patch is effectively empty and we can return an empty string
 	if !self.patch.ContainsChanges() {
 		return ""
+	}
+
+	digitWidth := 0
+	if self.showLineNumbers && !self.plain {
+		digitWidth = len(fmt.Sprintf("%d", self.patch.MaxLineNumber()))
+		if digitWidth < 3 {
+			digitWidth = 3
+		}
 	}
 
 	stringBuilder := &strings.Builder{}
@@ -74,17 +99,20 @@ func (self *patchPresenter) format() string {
 	}
 
 	for _, line := range self.patch.header {
+		gutter := self.formatGutter(-1, -1, digitWidth)
 		// always passing false for 'included' here because header lines are not part of the patch
-		appendLine(self.formatLineAux(line, theme.DefaultTextColor.SetBold(), false))
+		appendLine(gutter + self.formatLineAux(line, theme.DefaultTextColor.SetBold(), false))
 	}
 
 	for _, hunk := range self.patch.hunks {
+		gutter := self.formatGutter(-1, -1, digitWidth)
 		appendLine(
-			self.formatLineAux(
-				hunk.formatHeaderStart(),
-				style.FgCyan,
-				false,
-			) +
+			gutter +
+				self.formatLineAux(
+					hunk.formatHeaderStart(),
+					style.FgCyan,
+					false,
+				) +
 				// we're splitting the line into two parts: the diff header and the context
 				// We explicitly pass 'included' as false for both because these are not part
 				// of the actual patch
@@ -95,17 +123,51 @@ func (self *patchPresenter) format() string {
 				),
 		)
 
+		oldLineNum := hunk.oldStart
+		newLineNum := hunk.newStart
+
 		for _, line := range hunk.bodyLines {
-			style := self.patchLineStyle(line)
+			var gutter string
+			switch line.Kind {
+			case CONTEXT:
+				gutter = self.formatGutter(oldLineNum, newLineNum, digitWidth)
+				oldLineNum++
+				newLineNum++
+			case ADDITION:
+				gutter = self.formatGutter(-1, newLineNum, digitWidth)
+				newLineNum++
+			case DELETION:
+				gutter = self.formatGutter(oldLineNum, -1, digitWidth)
+				oldLineNum++
+			default:
+				gutter = self.formatGutter(-1, -1, digitWidth)
+			}
+
+			lineStyle := self.patchLineStyle(line)
 			if line.IsChange() {
-				appendLine(self.formatLine(line.Content, style, lineIdx))
+				appendLine(gutter + self.formatLine(line.Content, lineStyle, lineIdx))
 			} else {
-				appendLine(self.formatLineAux(line.Content, style, false))
+				appendLine(gutter + self.formatLineAux(line.Content, lineStyle, false))
 			}
 		}
 	}
 
 	return stringBuilder.String()
+}
+
+func (self *patchPresenter) formatGutter(oldNum, newNum int, digitWidth int) string {
+	if digitWidth == 0 || self.plain {
+		return ""
+	}
+
+	gutterStyle := style.FgCyan
+
+	newStr := fmt.Sprintf("%*s", digitWidth, "")
+	if newNum >= 0 {
+		newStr = fmt.Sprintf("%*d", digitWidth, newNum)
+	}
+
+	return gutterStyle.Sprintf("%s │ ", newStr)
 }
 
 func (self *patchPresenter) patchLineStyle(patchLine *PatchLine) style.TextStyle {

@@ -114,6 +114,8 @@ type GuiConfig struct {
 	EnlargedSideViewLocation string `yaml:"enlargedSideViewLocation"`
 	// If true, wrap lines in the staging view to the width of the view. This makes it much easier to work with diffs that have long lines, e.g. paragraphs of markdown text.
 	WrapLinesInStagingView bool `yaml:"wrapLinesInStagingView"`
+	// If true, show line numbers in the staging view (unstaged/staged changes and patch building).
+	ShowDiffLineNumbers bool `yaml:"showDiffLineNumbers"`
 	// If true, hunk selection mode will be enabled by default when entering the staging view.
 	UseHunkModeInStagingView bool `yaml:"useHunkModeInStagingView"`
 	// One of 'auto' (default) | 'en' | 'zh-CN' | 'zh-TW' | 'pl' | 'nl' | 'ja' | 'ko' | 'ru' | 'pt'
@@ -769,6 +771,7 @@ func GetDefaultConfig() *UserConfig {
 			MainPanelSplitMode:       "flexible",
 			EnlargedSideViewLocation: "left",
 			WrapLinesInStagingView:   true,
+			ShowDiffLineNumbers:     true,
 			UseHunkModeInStagingView: true,
 			Language:                 "auto",
 			TimeFormat:               "02 Jan 06",

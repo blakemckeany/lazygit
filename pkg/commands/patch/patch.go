@@ -197,6 +197,23 @@ func (self *Patch) AdjustLineNumber(lineNumber int) int {
 	return adjustedLineNumber
 }
 
+// Returns the highest line number (old or new) across all hunks.
+// Used to determine the gutter width for line number display.
+func (self *Patch) MaxLineNumber() int {
+	maxNum := 0
+	for _, hunk := range self.hunks {
+		oldEnd := hunk.oldStart + hunk.oldLength()
+		newEnd := hunk.newStart + hunk.newLength()
+		if oldEnd > maxNum {
+			maxNum = oldEnd
+		}
+		if newEnd > maxNum {
+			maxNum = newEnd
+		}
+	}
+	return maxNum
+}
+
 func (self *Patch) IsSingleHunkForWholeFile() bool {
 	if len(self.hunks) != 1 {
 		return false
